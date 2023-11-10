@@ -1,0 +1,114 @@
+version: '3.9'
+
+services:
+  cmak:
+    image: ghcr.io/eshepelyuk/dckr/cmak-3.0.0.5:latest
+    restart: always
+    container_name: cmak-manager
+    networks:
+      kafka_network:
+        aliases:
+          - cmak
+    ports:
+      - "9000:9000"
+    environment:
+      ZK_HOSTS: "zookeeper-1:2181"
+    depends_on:
+      - zookeeper-1
+
+  # ZooKeeper is a centralized service for maintaining configuration information,
+  # naming, providing distributed synchronization, and providing group services.
+  # It provides distributed coordination for our Kafka cluster.
+  # http://zookeeper.apache.org/
+  zookeeper-1:
+    image: confluentinc/cp-zookeeper:latest
+    # ZooKeeper is designed to "fail-fast", so it is important to allow it to
+    # restart automatically.
+    restart: unless-stopped
+    hostname: zookeeper-1
+    networks:
+      kafka_network:
+        aliases:
+          - zookeeper
+    container_name: zookeeper-1
+    # We'll expose the ZK client port so that we can connect to it from our applications.
+    ports:
+      - "2181:2181"
+    volumes:
+      - ./.zks-kfks-target/zookeeper-1/data:/var/lib/zookeeper/data
+      - ./.zks-kfks-target/zookeeper-1/datalog:/var/lib/zookeeper/log
+    environment:
+      ZOOKEEPER_SERVER_ID: 1
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+      ZOOKEEPER_SERVERS: zookeeper-1:2888:3888
+
+  ##################################################
+  ##################################################
+  kafka-broker1:
+    image: confluentinc/cp-kafka:latest
+    hostname: kafka-broker1
+    container_name: kafka-broker1
+    networks:
+      kafka_network:
+        aliases:
+          - kafka-broker
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: "zookeeper-1:2181"
+      KAFKA_LISTENERS: LISTENER_DOCKER_INTERNAL://kafka-broker1:29092,LISTENER_DOCKER_EXTERNAL://0.0.0.0:9092
+      KAFKA_ADVERTISED_LISTENERS: LISTENER_DOCKER_INTERNAL://kafka-broker1:29092,LISTENER_DOCKER_EXTERNAL://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: LISTENER_DOCKER_INTERNAL:PLAINTEXT,LISTENER_DOCKER_EXTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: LISTENER_DOCKER_INTERNAL
+      KAFKA_LOG4J_LOGGERS: "kafka.controller=INFO,kafka.producer.async.DefaultEventHandler=INFO,state.change.logger=INFO"
+      KAFKA_AUTHORIZER_CLASS_NAME: kafka.security.authorizer.AclAuthorizer
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_ALLOW_EVERYONE_IF_NO_ACL_FOUND: "true"
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    volumes:
+      - ./.zks-kfks-target/kafka-broker1/logs:/var/log/kafka
+      - ./.zks-kfks-target/kafka-broker1/data:/var/lib/kafka/data
+    depends_on:
+      - zookeeper-1
+
+  ##################################################
+  # To execute command in order to create topics.
+  # replication factor 1 and particion 1.
+  ##################################################
+  kafka-mktopics:
+    image: confluentinc/cp-kafka:latest
+    container_name: kafka_mktopics
+    networks:
+      kafka_network:
+        aliases:
+          - mktopics
+    depends_on:
+      - zookeeper-1
+      - kafka-broker1
+    entrypoint: ['/bin/bash', '-c']
+    command: |
+      "echo Waiting for Kafka to be ready... 
+       cub kafka-ready -b kafka-broker1:29092 1 60
+      
+       echo -e 'Creating default topics' 
+       kafka-topics --create --if-not-exists --bootstrap-server kafka-broker1:29092 --replication-factor 1 --partitions 2 --topic testkfk
+       kafka-topics --create --if-not-exists --bootstrap-server kafka-broker1:29092 --replication-factor 1 --partitions 2 --topic orders
+       kafka-topics --create --if-not-exists --bootstrap-server kafka-broker1:29092 --replication-factor 1 --partitions 2 --topic order-validations
+       kafka-topics --create --if-not-exists --bootstrap-server kafka-broker1:29092 --replication-factor 1 --partitions 2 --topic warehouse-inventory
+       kafka-topics --create --if-not-exists --bootstrap-server kafka-broker1:29092 --replication-factor 1 --partitions 2 --topic customers
+       kafka-topics --create --if-not-exists --bootstrap-server kafka-broker1:29092 --replication-factor 1 --partitions 2 --topic payments
+       kafka-topics --create --if-not-exists --bootstrap-server kafka-broker1:29092 --replication-factor 1 --partitions 2 --topic platinum
+       kafka-topics --create --if-not-exists --bootstrap-server kafka-broker1:29092 --replication-factor 1 --partitions 2 --topic gold
+       kafka-topics --create --if-not-exists --bootstrap-server kafka-broker1:29092 --replication-factor 1 --partitions 2 --topic silver
+       kafka-topics --create --if-not-exists --bootstrap-server kafka-broker1:29092 --replication-factor 1 --partitions 2 --topic bronze
+
+       echo -e 'Topics was created successfully'
+       kafka-topics --bootstrap-server kafka-broker1:29092 --list
+       "
+
+networks:
+  kafka_network:
+    name: argades_kafka_net
+    driver: bridge
